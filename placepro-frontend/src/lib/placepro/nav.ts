@@ -48,6 +48,6 @@ export const ROLE_NAV: Record<Role, NavItem[]> = {
 };
 
 export const FOOTER_NAV: { label: string; icon: LucideIcon; dialog: "help" | "settings" }[] = [
-  { label: "Help & Support", icon: LifeBuoy, dialog: "help" },
+  // { label: "Help & Support", icon: LifeBuoy, dialog: "help" },
   { label: "Settings", icon: Settings2, dialog: "settings" },
 ];

@@ -166,7 +166,7 @@ export function NavList({
             })}
           </ul>
 
-          <div className={cn("mt-3 flex items-center gap-2.5 rounded-lg px-1.5 py-1", !expanded && "justify-center px-0")}>
+          {/* <div className={cn("mt-3 flex items-center gap-2.5 rounded-lg px-1.5 py-1", !expanded && "justify-center px-0")}>
             <span
               aria-hidden
               className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[11px] font-semibold uppercase text-primary"
@@ -179,7 +179,7 @@ export function NavList({
                 <p className="truncate text-[11px] text-muted-foreground">{user.title}</p>
               </div>
             ) : null}
-          </div>
+          </div> */}
         </div>
       </div>
     </TooltipProvider>
