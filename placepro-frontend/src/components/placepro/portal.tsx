@@ -25,7 +25,7 @@ export default function Portal() {
     void useAppStore.getState().restoreSession().finally(() => setChecking(false));
   }, []);
   useEffect(() => {
-    if (user?.mustChangePassword) return;
+    if (user?.mustChangePassword || pathname === "/change-password") return;
     if (user && (pathname === "/" || pathname === "/login")) router.replace(routeHref(user.role, "dashboard"));
     if (route) {
       useAppStore.setState({ route });
@@ -35,7 +35,7 @@ export default function Portal() {
   }, [user, pathname, route, router]);
   if (checking) return <div className="grid min-h-screen place-items-center">Loading PlacePro...</div>;
   if (!user) return <LoginPage />;
-  if (user.mustChangePassword) return <ChangePasswordPage />;
+  if (user.mustChangePassword || pathname === "/change-password") return <ChangePasswordPage />;
   if (!route) return <div className="space-y-4 p-8"><h1>Page not found or unavailable for your role</h1><Link href={routeHref(user.role, "dashboard")}>Return to dashboard</Link></div>;
   if (JSON.stringify(storedRoute) !== JSON.stringify(route)) return <div className="p-8">Loading page...</div>;
   // Wait until route-dependent legacy components see the same URL parameters.

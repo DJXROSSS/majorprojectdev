@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useRouter } from "next/navigation";
 
 /* ------------------------------------------------------------------ */
 /* AppShell — floating sidebar + header + content + sticky footer      */
@@ -60,8 +61,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
         <footer className="mt-auto">
           <div className="mx-auto flex max-w-[1400px] flex-col gap-1 border-t border-border/70 px-4 py-4 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-            {/* <p>PlacePro · GLA University · G-171</p> */}
-            {/* <p className="pb-[env(safe-area-inset-bottom)]">Demo environment — data resets on reload</p> */}
           </div>
         </footer>
       </div>
@@ -122,7 +121,7 @@ function SettingsDialog() {
   const [importAlerts, setImportAlerts] = useState(true);
   const theme = useSyncExternalStore(subscribeToTheme, getThemePreference, () => "system");
   const { toast } = useToast();
-
+  const router = useRouter();
   return (
     <Dialog open={uiDialog === "settings"} onOpenChange={(v) => !v && closeDialog()}>
       <DialogContent className="sm:max-w-md">
@@ -152,20 +151,13 @@ function SettingsDialog() {
             </div>
             <Switch id="pin-setting" checked={pinned} onCheckedChange={setSidebarPinned} />
           </div>
-          {/* <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center justify-between gap-4">
             <div>
-              <Label htmlFor="digest-setting" className="text-[13px] font-medium">Weekly performance digest</Label>
-              <p className="text-xs text-muted-foreground">Batch performance summary every Monday.</p>
+              <Label htmlFor="import-setting" className="text-[13px] font-medium">Change password</Label>
+              <p className="text-xs text-muted-foreground">Update your account password.</p>
             </div>
-            <Switch id="digest-setting" checked={emailDigest} onCheckedChange={setEmailDigest} />
-          </div> */}
-          {/* <div className="flex items-center justify-between gap-4">
-            <div>
-              <Label htmlFor="import-setting" className="text-[13px] font-medium">Import alerts</Label>
-              <p className="text-xs text-muted-foreground">Notify me when an import needs review.</p>
-            </div>
-            <Switch id="import-setting" checked={importAlerts} onCheckedChange={setImportAlerts} />
-          </div> */}
+            <Button type="button" variant="outline" size="sm" onClick={() => { closeDialog(); router.push("/change-password"); }}>Change password</Button>
+          </div>
         </div>
         <div className="flex justify-end gap-2">
           <Button
