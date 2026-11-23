@@ -216,6 +216,7 @@ export const api = {
   student: (id: string) => request<Student>(`/students/${id}`),
   updateStudent: (id: string, payload: { name?: string; email?: string; mobileNumber?: string; section?: string; cgpa?: number }) =>
     request<Student>(`/students/${encodeURIComponent(id)}`, json("PATCH", payload)),
+  resetStudentPassword: (id: string) => request<void>(`/students/${encodeURIComponent(id)}/reset-password`, { method: "POST" }),
   unassignStudentSection: (id: string) => request<Student>(`/students/${encodeURIComponent(id)}/section`, { method: "DELETE" }),
   studentGithubStatistics: (id: string) => request<GithubStatisticsResponse>(`/students/${encodeURIComponent(id)}/github-statistics`),
   studentAssessments: (id: string) => request<Paginated<StudentAssessment>>(`/students/${id}/assessments`),

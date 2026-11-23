@@ -83,6 +83,24 @@ test('admin registration, protected first login and password rotation', async t 
       assert.equal((await req('/users/trainers','POST',{},changedTrainer.body.token)).status,403);
       assert.equal((await req('/auth/login','POST',{email:'admin@test.invalid',password:'ExistingAdmin123!'},null)).body.user.mustChangePassword,false);
     });
+    await t.test('only admins can reset a student password to the saved mobile number',async()=>{
+      const current=await req('/auth/login','POST',{email:studentInput.email,password:'ChangedStudent123!'},null);
+      const trainerSession=await req('/auth/login','POST',{email:'trainer@test.invalid',password:'ChangedTrainer123!'},null);
+      const endpoint=`/students/${student.body.studentId}/reset-password`;
+      assert.equal((await req(endpoint,'POST',{},trainerSession.body.token)).status,403);
+      assert.equal((await req(endpoint,'POST',{},current.body.token)).status,403);
+      assert.equal((await req('/students/999999/reset-password','POST',{})).status,404);
+      const unlinked=(await client.query(`INSERT INTO students (roll_no,full_name,email) VALUES ('RESET-UNLINKED','Unlinked','reset-unlinked@test.invalid') RETURNING student_id`)).rows[0];
+      assert.equal((await req(`/students/${unlinked.student_id}/reset-password`,'POST',{})).status,409);
+      assert.equal((await req(endpoint,'POST',{})).status,204);
+      assert.equal((await req('/auth/me','GET',undefined,current.body.token)).status,401);
+      assert.equal((await req('/auth/login','POST',{email:studentInput.email,password:'ChangedStudent123!'},null)).status,401);
+      const resetLogin=await req('/auth/login','POST',{email:studentInput.email,password:'9876543210'},null);
+      assert.equal(resetLogin.status,200); assert.equal(resetLogin.body.user.mustChangePassword,true);
+      assert.equal((await req('/me/student','GET',undefined,resetLogin.body.token)).status,403);
+      const saved=(await client.query('SELECT password_hash FROM users WHERE user_id=$1',[student.body.userId])).rows[0];
+      assert.notEqual(saved.password_hash,'9876543210'); assert.equal(await bcrypt.compare('9876543210',saved.password_hash),true);
+    });
     await t.test('validation, uniqueness and safe linking preserve historical student evaluations',async()=>{
       assert.equal((await req('/students','POST',studentInput)).status,409);
       assert.equal((await req('/students','POST',{...studentInput,email:'other@test.invalid'})).status,409);

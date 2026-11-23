@@ -1,11 +1,12 @@
 const { Router } = require("express");
+const bcrypt = require("bcryptjs");
 const { pool, withTransaction } = require("../../../config/db");
 const { buildStudentResponseObject } = require("../../../utils/student-metrics");
 const { requireAuth, requireRole } = require("../../../middleware/auth.middleware");
 const profileIntelligenceRouter = require("./profile-intelligence.controller");
 const projectsRouter = require("./projects.controller");
 
-const { registerAccount, normalizeMobile } = require("../../../utils/registration");
+const { registerAccount, normalizeMobile, positiveId, REGISTRATION_PASSWORD_COST } = require("../../../utils/registration");
 const router = Router();
 
 const trainerAssignmentSql = (batchAlias, parameter) => `EXISTS (
@@ -232,6 +233,32 @@ router.get("/students/:studentId", requireAuth, requireRole(["admin", "trainer"]
   } catch (err) {
     next(err);
   }
+});
+
+router.post("/students/:studentId/reset-password", requireAuth, requireRole(["admin"]), async (req, res, next) => {
+  try {
+    if (!positiveId(req.params.studentId)) return res.status(400).json({ error: { code: "VALIDATION", message: "Invalid student ID" } });
+    const found = await withTransaction(async (client) => {
+      const result = await client.query(`SELECT s.student_id, u.user_id, u.mobile_number
+        FROM students s LEFT JOIN users u ON u.user_id=s.user_id AND u.role='STUDENT'
+        WHERE s.student_id=$1 FOR UPDATE OF s`, [req.params.studentId]);
+      if (!result.rows.length) return false;
+      const student = result.rows[0];
+      if (!student.user_id) { const error = new Error("This student has no linked login account"); error.statusCode = 409; throw error; }
+      const locked = await client.query(`SELECT mobile_number FROM users WHERE user_id=$1 FOR UPDATE`, [student.user_id]);
+      const mobile = locked.rows[0]?.mobile_number;
+      if (typeof mobile !== "string" || !/^[6-9]\d{9}$/.test(mobile)) {
+        const error = new Error("A valid saved mobile number is required before resetting the password"); error.statusCode = 409; throw error;
+      }
+      const hash = await bcrypt.hash(mobile, REGISTRATION_PASSWORD_COST);
+      await client.query(`UPDATE users SET password_hash=$1, must_change_password=TRUE, auth_version=auth_version+1 WHERE user_id=$2`, [hash, student.user_id]);
+      await client.query(`INSERT INTO audit_logs (actor_id,actor_name,module,action,status) VALUES ($1,$2,'Students',$3,'success')`,
+        [req.user.id, req.user.name, `Reset password for student ${student.student_id}`]);
+      return true;
+    });
+    if (!found) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Student not found" } });
+    res.status(204).send();
+  } catch (error) { next(error); }
 });
 
 router.patch("/students/:studentId", requireAuth, requireRole(["admin", "trainer"]), async (req, res, next) => {

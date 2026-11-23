@@ -82,6 +82,9 @@ export default function StudentsPage() {
   const [mutationError, setMutationError] = useState("");
   const [mutating, setMutating] = useState(false);
   const [unassigningStudent, setUnassigningStudent] = useState<Student | null>(null);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetting, setResetting] = useState(false);
   const { toast } = useToast();
   const batchOptions = useMemo(() => batches.map(b => ({ label: b.name, value: b.name })), [batches]);
   const filters = readStudentFilters(new URLSearchParams(searchParams.toString()));
@@ -290,14 +293,32 @@ export default function StudentsPage() {
               <div className="space-y-1"><Label htmlFor="student-mobile">Mobile</Label><Input id="student-mobile" value={editForm.mobileNumber} maxLength={20} onChange={event => setEditForm(form => ({ ...form, mobileNumber: event.target.value }))} /></div>
               <div className="space-y-1"><Label htmlFor="student-cgpa">CGPA</Label><Input id="student-cgpa" type="number" min={0} max={10} step={0.01} value={editForm.cgpa} onChange={event => setEditForm(form => ({ ...form, cgpa: event.target.value }))} /></div>
             </> : null}
-            <div className="space-y-1"><Label htmlFor="student-section">Section</Label><Select value={editForm.section} onValueChange={sectionValue => setEditForm(form => ({ ...form, section: sectionValue }))}>
-              <SelectTrigger id="student-section"><SelectValue placeholder="Select section" /></SelectTrigger><SelectContent>{editBatch?.sections.map(sectionValue => <SelectItem key={sectionValue} value={sectionValue}>{sectionValue}</SelectItem>)}</SelectContent>
-            </Select></div>
+            <div className="flex items-end justify-between gap-3">
+              <div className="space-y-1"><Label htmlFor="student-section">Section</Label><Select value={editForm.section} onValueChange={sectionValue => setEditForm(form => ({ ...form, section: sectionValue }))}>
+                <SelectTrigger id="student-section"><SelectValue placeholder="Select section" /></SelectTrigger><SelectContent>{editBatch?.sections.map(sectionValue => <SelectItem key={sectionValue} value={sectionValue}>{sectionValue}</SelectItem>)}</SelectContent>
+              </Select></div>
+              {user?.role === "admin" && editMode === "details" && <Button type="button" variant="ghost" className="border border-danger text-danger hover:text-danger focus:text-danger" disabled={mutating} onClick={() => { setResetError(""); setResetConfirmOpen(true); }}>Reset password</Button>}
+            </div>
             {mutationError ? <p role="alert" className="text-sm text-danger">{mutationError}</p> : null}
           </div>
           <DialogFooter><Button variant="outline" disabled={mutating} onClick={() => setEditingStudent(null)}>Cancel</Button><Button disabled={mutating || !editForm.section} onClick={() => void saveStudent()}>{mutating ? "Saving…" : "Save"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+      <AlertDialog open={resetConfirmOpen} onOpenChange={(open) => { if (!open && !resetting) setResetConfirmOpen(false); }}>
+        <AlertDialogContent aria-describedby={undefined}><AlertDialogHeader><AlertDialogTitle>Are you sure to reset this student&apos;s password?</AlertDialogTitle></AlertDialogHeader>
+          {resetError && <p role="alert" className="text-sm text-destructive">{resetError}</p>}
+          <AlertDialogFooter><AlertDialogCancel disabled={resetting}>No</AlertDialogCancel><Button variant="destructive" disabled={resetting} onClick={async () => {
+            if (!editingStudent) return;
+            setResetting(true); setResetError("");
+            try {
+              await api.resetStudentPassword(editingStudent.id);
+              setResetConfirmOpen(false);
+              toast({ title: "Password reset", description: `${editingStudent.name} can sign in with their saved mobile number.` });
+            } catch (error) { setResetError(error instanceof Error ? error.message : "Unable to reset password."); }
+            finally { setResetting(false); }
+          }}>{resetting ? "Resetting…" : "Yes"}</Button></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog open={unassigningStudent !== null} onOpenChange={(open) => { if (!open && !mutating) setUnassigningStudent(null); }}>
         <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remove student from section?</AlertDialogTitle><AlertDialogDescription>
           {unassigningStudent?.name} will become unassigned. Their account, batch, assessments, scores, projects, and history will remain intact.
