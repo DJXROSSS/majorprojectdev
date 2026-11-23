@@ -178,7 +178,7 @@ export default function LoginPage() {
           </form>
 
           {/* demo credentials — this is a university project demo */}
-          <div className="mt-8 rounded-xl border border-border bg-card p-4">
+          {/* <div className="mt-8 rounded-xl border border-border bg-card p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Demo accounts</p>
             <div className="mt-2.5 grid gap-1.5 text-[13px]">
               {[
@@ -205,7 +205,7 @@ export default function LoginPage() {
             <p className="mt-2.5 text-xs text-muted-foreground">
               Password for all demo accounts: <span className="font-mono">placepro</span> — click a role to fill it in.
             </p>
-          </div>
+          </div> */}
         </div>
       </section>
     </div>
