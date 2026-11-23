@@ -7,7 +7,7 @@ const bcrypt = require("bcryptjs");
 const nativeBcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const { pool } = require("../src/config/db");
-const { hashConcurrency } = require("../src/utils/import-password-hashing");
+const { MOBILE_FIRST_LOGIN } = require("../src/utils/registration");
 const { logger } = require("../src/utils/logger");
 const {
   template,
@@ -77,7 +77,7 @@ test("bulk registration API and transaction guarantees", async (t) => {
       {
         method: body === undefined ? "GET" : "POST",
         headers: {
-          ...(actor ? { Authorization: `Bearer ${token(actor)}` } : {}),
+          ...(actor ? { Authorization: `Bearer ${typeof actor === "string" ? actor : token(actor)}` } : {}),
           ...(!multipart ? { "Content-Type": "application/json" } : {}),
         },
         body:
@@ -196,12 +196,15 @@ test("bulk registration API and transaction guarantees", async (t) => {
   await t.test(
     "admin only, preview validation, strict rejection, valid-only and repeat confirmation",
     async (subtest) => {
+      const hash = bcrypt.hash;
+      const hashing = subtest.mock.method(bcrypt, "hash", (...args) => hash(...args));
+      subtest.mock.method(nativeBcrypt, "hash", async () => assert.fail("Student import invoked native bcrypt"));
       assert.equal(
         (await preview([row("AUTH")], "students", null)).status,
         401,
       );
       assert.equal((await preview([row("AUTH")], "students", 2)).status, 403);
-      const valid = row("0002");
+      const valid = row("0002", "+91 98765-43210");
       valid[2] = "0002@TEST.INVALID";
       const p = await preview([
         valid,
@@ -240,14 +243,12 @@ test("bulk registration API and transaction guarantees", async (t) => {
       assert.equal(result.body.imported, 1);
       assert.equal(result.body.skipped, 5);
       const timing = metrics.at(-1);
-      assert.equal(timing.hashConcurrency, hashConcurrency);
-      assert.equal(timing.hashCount, 1);
+      assert.equal(timing.hashCount, 0);
       assert.equal(timing.imported, 1);
       assert.equal(timing.skipped, 5);
       assert.ok(Number.isInteger(timing.totalMs));
-      for (const stage of ["preflightValidationMs", "passwordHashingMs", "transactionMs"]) {
-        assert.ok(Number.isInteger(timing.stages[stage]));
-      }
+      assert.ok(Number.isInteger(timing.stages.transactionMs));
+      assert.equal(timing.stages.passwordHashingMs, undefined);
       assert.deepEqual((await confirm(p)).body, result.body);
       assert.equal(metrics.at(-1).hashCount, 0);
       const u = (
@@ -255,16 +256,16 @@ test("bulk registration API and transaction guarantees", async (t) => {
           "SELECT * FROM users WHERE email='0002@test.invalid'",
         )
       ).rows[0];
-      assert.match(u.password_hash, /^\$2b\$12\$/);
-      assert.equal(await bcrypt.compare("9876543210", u.password_hash), true);
-      assert.equal(bcrypt.getRounds(u.password_hash), 12);
+      assert.equal(u.password_hash, MOBILE_FIRST_LOGIN);
+      assert.equal(u.mobile_number, "9876543210");
+      assert.doesNotMatch(JSON.stringify(result.body), /9876543210|98765-43210|mobile-first-login/);
       assert.equal(u.must_change_password, true);
       const s = (
         await client.query("SELECT * FROM students WHERE roll_no='0002'")
       ).rows[0];
       assert.equal(String(s.academic_batch_id), "1");
       assert.equal(
-        (await req("/auth/login", { email: u.email, password: "wrong" }, null))
+        (await req("/auth/login", { email: u.email, password: "9876543211" }, null))
           .status,
         401,
       );
@@ -273,17 +274,34 @@ test("bulk registration API and transaction guarantees", async (t) => {
         { email: u.email, password: "9876543210" },
         null,
       );
+      assert.equal(login.status, 200);
       assert.equal(login.body.user.mustChangePassword, true);
-      assert.equal(
-        (
-          await req(
-            "/users/imports/students/template",
-            undefined,
-            Number(u.user_id),
-          )
-        ).status,
-        403,
+      const restricted = await req("/users/imports/students/template", undefined, login.body.token);
+      assert.equal(restricted.status, 403);
+      assert.equal(restricted.body.error.code, "PASSWORD_CHANGE_REQUIRED");
+
+      const newPassword = "ImportedStudent123!";
+      const denied = await req("/auth/change-password", {
+        currentPassword: "9876543211", newPassword,
+      }, login.body.token);
+      assert.equal(denied.status, 401);
+      assert.equal(hashing.mock.callCount(), 0);
+
+      const changed = await req("/auth/change-password", {
+        currentPassword: "9876543210", newPassword,
+      }, login.body.token);
+      assert.equal(changed.status, 200);
+      assert.equal(changed.body.user.mustChangePassword, false);
+      assert.equal(hashing.mock.callCount(), 1);
+      const { rows: [activated] } = await client.query(
+        "SELECT password_hash,must_change_password FROM users WHERE user_id=$1", [u.user_id],
       );
+      assert.equal(activated.must_change_password, false);
+      assert.equal(bcrypt.getRounds(activated.password_hash), 12);
+      assert.equal(await bcrypt.compare(newPassword, activated.password_hash), true);
+      assert.equal((await req("/auth/me", undefined, login.body.token)).status, 401);
+      assert.equal((await req("/auth/login", { email: u.email, password: "9876543210" }, null)).status, 401);
+      assert.equal((await req("/auth/login", { email: u.email, password: newPassword }, null)).status, 200);
       assert.equal(
         (await preview([row("0002")])).body.rows[0].status,
         "Already Registered",
@@ -302,22 +320,30 @@ test("bulk registration API and transaction guarantees", async (t) => {
       );
       assert.equal(p.body.summary.valid, 1);
       assert.equal(p.body.rows[1].status, "Invalid Batch");
-      const legacyHash = subtest.mock.method(bcrypt, "hash", async () => assert.fail("Import rehashed a precomputed password"));
+      const hashing = subtest.mock.method(bcrypt, "hash", async () => assert.fail("Trainer import invoked bcrypt"));
+      subtest.mock.method(nativeBcrypt, "hash", async () => assert.fail("Trainer import invoked native bcrypt"));
       const result = await confirm(p, "valid-only", "trainers");
       assert.equal(result.body.imported, 1);
-      assert.equal(legacyHash.mock.callCount(), 0);
-      legacyHash.mock.restore();
+      assert.equal(hashing.mock.callCount(), 0);
       const u = (
         await client.query("SELECT * FROM users WHERE email='ta@test.invalid'")
       ).rows[0];
       assert.equal(u.role, "TRAINER");
-      assert.match(u.password_hash, /^\$2b\$12\$/);
-      assert.equal(await bcrypt.compare("9123456789", u.password_hash), true);
+      assert.equal(u.password_hash, MOBILE_FIRST_LOGIN);
+      const login = await req("/auth/login", { email: u.email, password: "9123456789" }, null);
+      assert.equal(login.status, 200);
+      assert.equal(login.body.user.mustChangePassword, true);
       assert(
         (
           await client.query("SELECT trainer_ids FROM academic_batches")
         ).rows.every((b) => b.trainer_ids.includes(String(u.user_id))),
       );
+      await client.query("UPDATE users SET must_change_password=FALSE WHERE user_id=$1", [u.user_id]);
+      try {
+        assert.equal((await req("/auth/login", { email: u.email, password: "9123456789" }, null)).status, 401);
+      } finally {
+        await client.query("UPDATE users SET must_change_password=TRUE WHERE user_id=$1", [u.user_id]);
+      }
     },
   );
   await t.test(
@@ -345,11 +371,7 @@ test("bulk registration API and transaction guarantees", async (t) => {
   );
   await t.test(
     "failed row has no orphan account; strict rolls back the entire import and can retry",
-    async (subtest) => {
-      subtest.mock.method(nativeBcrypt, "hash", async (_mobile, cost) => {
-        assert.equal(cost, 12);
-        return "isolated-transaction-test-hash";
-      });
+    async () => {
       await client.query(
         `CREATE FUNCTION reject_bulk_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.roll_no='FAIL' THEN RAISE EXCEPTION 'Forced failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_bulk_row BEFORE INSERT ON students FOR EACH ROW EXECUTE FUNCTION reject_bulk_row()`,
       );
@@ -428,38 +450,6 @@ test("bulk registration API and transaction guarantees", async (t) => {
     }
   });
 
-  await t.test("failed hashing keeps the preview retryable and never opens a transaction", async (subtest) => {
-    const p = await preview([row("HASH-FAILURE")]);
-    const privateValue = "private-native-error";
-    let failHashing = true;
-    subtest.mock.method(nativeBcrypt, "hash", async (mobile) => {
-      if (failHashing) throw new Error(`${privateValue} ${mobile}`);
-      return "successful-retry-hash";
-    });
-    const logged = [];
-    subtest.mock.method(logger, "error", (event, error) => logged.push({ event, message: error.message }));
-    subtest.mock.method(logger, "info", (event, data) => logged.push({ event, ...data }));
-    const transactionQueries = [];
-    observeTransactionQuery = (sql) => transactionQueries.push(sql);
-    try {
-      const failed = await confirm(p, "strict");
-      assert.equal(failed.status, 500);
-      assert.equal(failed.body.error.message, "Unable to prepare import credentials. Retry confirmation.");
-      assert.equal(transactionQueries.length, 0);
-      assert.ok(logged.some((entry) => entry.event === "import.performance" && entry.hashCount === 0));
-      assert.doesNotMatch(JSON.stringify(logged), /private-native-error|9876543210/);
-      assert.equal((await client.query("SELECT status FROM registration_imports WHERE import_id=$1", [p.body.importId])).rows[0].status, "PREVIEW");
-      assert.equal((await client.query("SELECT 1 FROM users WHERE email='hash-failure@test.invalid'")).rowCount, 0);
-      failHashing = false;
-      const retried = await confirm(p, "strict");
-      assert.equal(retried.status, 200);
-      assert.equal(retried.body.imported, 1);
-      assert.doesNotMatch(JSON.stringify(logged), /successful-retry-hash/);
-    } finally {
-      observeTransactionQuery = undefined;
-    }
-  });
-
   await t.test("chunk size rejects invalid multipart and JSON values", async () => {
     const p = await preview([row("INVALID-CHUNK")]);
     for (const value of ["", "0", "-1", "49", "50.5", "500.0", "1001", "5e2"]) {
@@ -475,11 +465,8 @@ test("bulk registration API and transaction guarantees", async (t) => {
   });
 
   await t.test("student chunk sizes drive bulk SQL and every account is assigned exactly once", async (subtest) => {
-    // Exercise real bcrypt separately above. Large fixtures isolate database throughput.
-    subtest.mock.method(nativeBcrypt, "hash", async (_mobile, cost) => {
-      assert.equal(cost, 12);
-      return "isolated-chunk-test-hash";
-    });
+    subtest.mock.method(bcrypt, "hash", async () => assert.fail("Student import invoked bcrypt"));
+    subtest.mock.method(nativeBcrypt, "hash", async () => assert.fail("Student import invoked native bcrypt"));
     for (const count of [100, 500, 501, 1862, 5000]) {
       const prefix = `CHUNK-${count}-`;
       const p = await preview(Array.from({ length: count }, (_, i) => row(`${prefix}${i}`)), "students", 1, undefined, undefined, "csv");
@@ -505,9 +492,10 @@ test("bulk registration API and transaction guarantees", async (t) => {
       const { rows: [totals] } = await client.query(
         `SELECT count(*)::int total, count(DISTINCT s.user_id)::int linked,
                 count(*) FILTER (WHERE s.academic_batch_id=1 AND s.section='A' AND s.batch='Batch A'
-                  AND s.branch='CSE' AND s.cgpa=8 AND u.email=s.email AND u.must_change_password)::int assigned
+                  AND s.branch='CSE' AND s.cgpa=8 AND u.email=s.email AND u.must_change_password
+                  AND u.password_hash=$2)::int assigned
          FROM students s JOIN users u USING (user_id) WHERE s.roll_no LIKE $1`,
-        [`${prefix}%`],
+        [`${prefix}%`, MOBILE_FIRST_LOGIN],
       );
       assert.deepEqual(totals, { total: count, linked: count, assigned: count });
     }

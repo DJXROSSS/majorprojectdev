@@ -1,6 +1,8 @@
 const bcrypt = require("bcryptjs");
 const { withTransaction } = require("../config/db");
 const REGISTRATION_PASSWORD_COST = 12;
+// Bulk accounts use their stored mobile number until they set a password.
+const MOBILE_FIRST_LOGIN = "!mobile-first-login";
 
 function invalid(message, statusCode = 400) {
   const error = new Error(message);
@@ -262,4 +264,4 @@ async function registerAccount(body, role, actor, options = {}) {
     throw error;
   }
 }
-module.exports = { registerAccount, normalizeMobile, findStudentByIdentity, insertStudentAccounts, positiveId, REGISTRATION_PASSWORD_COST };
+module.exports = { registerAccount, normalizeMobile, findStudentByIdentity, insertStudentAccounts, positiveId, REGISTRATION_PASSWORD_COST, MOBILE_FIRST_LOGIN };

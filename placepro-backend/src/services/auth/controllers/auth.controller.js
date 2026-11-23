@@ -1,9 +1,11 @@
 const { Router } = require("express");
+const { timingSafeEqual } = require("node:crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { pool, withTransaction, writeAuditLog } = require("../../../config/db");
 const { requireAuth } = require("../../../middleware/auth.middleware");
 const { authRateLimit } = require("../../../middleware/auth-rate-limit");
+const { MOBILE_FIRST_LOGIN, REGISTRATION_PASSWORD_COST } = require("../../../utils/registration");
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "placepro-dev-secret";
 const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", maxAge: 7 * 24 * 60 * 60 * 1000 };
@@ -19,13 +21,23 @@ function session(res, u) {
     title: u.title || u.role, mustChangePassword: Boolean(u.must_change_password), ...(u.student_id ? { studentId: String(u.student_id) } : {}) } };
 }
 const denied = res => res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Invalid email or password" } });
+
+function matchesPassword(user, password) {
+  if (user.password_hash !== MOBILE_FIRST_LOGIN) return bcrypt.compare(password, user.password_hash);
+  const mobile = user.mobile_number;
+  if (user.must_change_password !== true || !["STUDENT", "TRAINER"].includes(user.role) ||
+      typeof mobile !== "string" || mobile.length !== 10 || !/^[6-9]\d{9}$/.test(mobile)) return false;
+  const supplied = Buffer.from(password, "utf8");
+  return supplied.length === mobile.length && timingSafeEqual(supplied, Buffer.from(mobile, "utf8"));
+}
+
 router.post("/auth/login", authRateLimit(), async (req, res, next) => {
   try {
     const { email, password } = req.body;
     if (typeof email !== "string" || typeof password !== "string" || password.length > 256) return denied(res);
     const { rows } = await pool.query(`SELECT u.*, s.student_id FROM users u LEFT JOIN students s ON s.user_id=u.user_id WHERE lower(btrim(u.email))=$1`, [email.trim().toLowerCase()]);
     const u = rows[0];
-    if (!u || u.status !== "active" || !(await bcrypt.compare(password, u.password_hash))) return denied(res);
+    if (!u || u.status !== "active" || !(await matchesPassword(u, password))) return denied(res);
     await writeAuditLog(u.user_id, u.full_name, "Auth", "User signed in", "success");
     res.json(session(res, u));
   } catch (error) { next(error); }
@@ -44,13 +56,13 @@ router.post("/auth/change-password", requireAuth, authRateLimit(), async (req, r
     const u = await withTransaction(async client => {
       const { rows } = await client.query(`SELECT * FROM users WHERE user_id=$1 FOR UPDATE`, [req.user.id]);
       const user = rows[0];
-      if (!user || user.status !== 'active' || Number(user.auth_version) !== req.user.authVersion || !(await bcrypt.compare(currentPassword, user.password_hash))) {
+      if (!user || user.status !== 'active' || Number(user.auth_version) !== req.user.authVersion || !(await matchesPassword(user, currentPassword))) {
         const error = new Error("Current password is incorrect or session expired"); error.statusCode = 401; throw error;
       }
-      if (newPassword === user.mobile_number || await bcrypt.compare(newPassword, user.password_hash)) {
+      if (newPassword === user.mobile_number || await matchesPassword(user, newPassword)) {
         const error = new Error("Choose a new password different from your current password and mobile number"); error.statusCode = 400; throw error;
       }
-      const hash = await bcrypt.hash(newPassword, 12);
+      const hash = await bcrypt.hash(newPassword, REGISTRATION_PASSWORD_COST);
       const updated = await client.query(`UPDATE users SET password_hash=$1, must_change_password=FALSE, auth_version=auth_version+1 WHERE user_id=$2 RETURNING *`, [hash, user.user_id]);
       await client.query(`INSERT INTO audit_logs (actor_id,actor_name,module,action,status) VALUES ($1,$2,'Auth','Password changed','success')`, [user.user_id,user.full_name]);
       const linked = await client.query(`SELECT student_id FROM students WHERE user_id=$1`, [user.user_id]);

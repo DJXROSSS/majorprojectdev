@@ -7,10 +7,9 @@ const {
   requireAuth,
   requireRole,
 } = require("../../middleware/auth.middleware");
-const { registerAccount, normalizeMobile, insertStudentAccounts, positiveId } = require("../../utils/registration");
+const { registerAccount, normalizeMobile, insertStudentAccounts, positiveId, MOBILE_FIRST_LOGIN } = require("../../utils/registration");
 const { csvCell } = require("../companies/shortlist-export");
 const { createImportPerformance } = require("../../utils/import-performance");
-const { hashConcurrency, prepareImportHashes } = require("../../utils/import-password-hashing");
 const router = Router();
 const MAX_ROWS = 5000;
 const MAX_SHEET_ROWS = 50000;
@@ -406,7 +405,7 @@ function markImported(row, userId) {
   row.userId = userId;
 }
 
-async function writeStudentChunk(client, rows, batch, actor, hashes, mode) {
+async function writeStudentChunk(client, rows, batch, actor, mode) {
   if (mode === "valid-only") await client.query("SAVEPOINT registration_chunk");
   let accounts;
   try {
@@ -414,7 +413,7 @@ async function writeStudentChunk(client, rows, batch, actor, hashes, mode) {
       name: record.name,
       email: record.email,
       mobile: normalizeMobile(record.mobileNumber),
-      password_hash: hashes.get(record.email),
+      password_hash: MOBILE_FIRST_LOGIN,
       roll: record.rollNumber.toUpperCase(),
       section: record.section,
       cgpa: record.cgpa ?? 0,
@@ -431,8 +430,8 @@ async function writeStudentChunk(client, rows, batch, actor, hashes, mode) {
     }
     // Keep the normal path bulk and narrow a write failure down to its rows.
     const middle = Math.floor(rows.length / 2);
-    await writeStudentChunk(client, rows.slice(0, middle), batch, actor, hashes, mode);
-    await writeStudentChunk(client, rows.slice(middle), batch, actor, hashes, mode);
+    await writeStudentChunk(client, rows.slice(0, middle), batch, actor, mode);
+    await writeStudentChunk(client, rows.slice(middle), batch, actor, mode);
     return;
   }
   if (mode === "valid-only") await client.query("RELEASE SAVEPOINT registration_chunk");
@@ -544,7 +543,6 @@ router.post(
 );
 router.post("/users/imports/:kind/confirm", async (req, res, next) => {
   const performance = createImportPerformance(`registration-${req.params.kind}-confirm`, req.requestId);
-  const preparedHashes = new Map();
   let result;
   try {
     const role = roleFor(req.params.kind),
@@ -568,11 +566,6 @@ router.post("/users/imports/:kind/confirm", async (req, res, next) => {
     if (new Date(preflightSession.expires_at) < new Date())
       fail("Import preview expired. Upload the file again", 410);
     const submitted = openRows(preflightSession);
-    const batchId = preflightSession.academic_batch_id ? String(preflightSession.academic_batch_id) : null;
-    const preliminary = await performance.measure("preflightValidationMs", () => validateRows(pool, role, submitted, batchId));
-    const eligible = preliminary.filter((row) => row.status === "Valid");
-    if (mode === "valid-only" || eligible.length === preliminary.length)
-      await performance.measure("passwordHashingMs", () => prepareImportHashes(eligible.map((row) => row.record), preparedHashes));
     result = await performance.measure("transactionMs", () => withTransaction(async (client) => {
       const { rows } = await client.query(
         "SELECT * FROM registration_imports WHERE import_id=$1 AND created_by=$2 AND account_role=$3 FOR UPDATE",
@@ -603,12 +596,10 @@ router.post("/users/imports/:kind/confirm", async (req, res, next) => {
           ),
         };
       const rowsToImport = validated.filter((row) => row.status === "Valid");
-      if (rowsToImport.some((row) => !preparedHashes.has(row.record.email)))
-        fail("Records changed during confirmation. Confirm the import again to revalidate them", 409);
       for (let offset = 0; offset < rowsToImport.length; offset += chunkSize) {
         const chunk = rowsToImport.slice(offset, offset + chunkSize);
         if (role === "STUDENT") {
-          await writeStudentChunk(client, chunk, studentBatch, req.user, preparedHashes, mode);
+          await writeStudentChunk(client, chunk, studentBatch, req.user, mode);
           continue;
         }
         for (const row of chunk) {
@@ -617,7 +608,7 @@ router.post("/users/imports/:kind/confirm", async (req, res, next) => {
             const account = await registerAccount(row.record, role, req.user, {
               client,
               checkExistingDetails: true,
-              passwordHash: preparedHashes.get(row.record.email),
+              passwordHash: MOBILE_FIRST_LOGIN,
             });
             markImported(row, account.userId);
             await client.query("RELEASE SAVEPOINT registration_row");
@@ -666,8 +657,7 @@ router.post("/users/imports/:kind/confirm", async (req, res, next) => {
       rows: result?.rows?.length,
       imported: result?.imported ?? 0,
       skipped: result?.skipped ?? 0,
-      hashConcurrency,
-      hashCount: preparedHashes.size,
+      hashCount: 0,
     });
   }
 });
